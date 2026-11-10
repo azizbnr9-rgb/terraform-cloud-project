@@ -19,8 +19,9 @@ resource "aws_db_parameter_group" "this" {
   }
 
   parameter {
-    name  = "log_connections"
-    value = "1"
+    name         = "log_connections"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   tags = var.tags
