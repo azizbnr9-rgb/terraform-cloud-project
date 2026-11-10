@@ -39,3 +39,9 @@ variable "github_repo" {
   type        = string
   default     = "terraform-cloud-project"
 }
+
+variable "create_bucket_with_cli" {
+  description = "Crée le bucket d'état via l'AWS CLI (contournement SCP AWS Academy Learner Lab)."
+  type        = bool
+  default     = true
+}

@@ -1,6 +1,6 @@
 output "state_bucket" {
   description = "Bucket à passer à terraform init -backend-config=\"bucket=...\"."
-  value       = aws_s3_bucket.state.bucket
+  value       = local.bucket_id
 }
 
 output "aws_region" {

@@ -191,6 +191,12 @@ variable "force_destroy_storage" {
   default     = true
 }
 
+variable "create_buckets_with_cli" {
+  description = "Crée les buckets via l'AWS CLI (true sur AWS Academy Learner Lab, SCP S3)."
+  type        = bool
+  default     = false
+}
+
 variable "log_retention_days" {
   description = "Conservation des journaux ALB (jours)."
   type        = number

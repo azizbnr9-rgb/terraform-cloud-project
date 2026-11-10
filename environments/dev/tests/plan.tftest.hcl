@@ -1,3 +1,9 @@
+# Test hors-ligne (fournisseur simulé) : vérifie que la configuration se planifie et s'applique.
+#   terraform test   (aucune ressource réelle créée)
+variables {
+  create_buckets_with_cli = false
+}
+
 mock_provider "aws" {
   mock_data "aws_availability_zones" {
     defaults = { names = ["us-east-1a", "us-east-1b", "us-east-1c"] }

@@ -11,6 +11,7 @@ single_nat_gateway = true
 
 create_iam_role                = false
 existing_instance_profile_name = "LabInstanceProfile"
+create_buckets_with_cli        = true # SCP Learner Lab sur s3:GetBucketObjectLockConfiguration
 
 instance_type    = "t3.micro"
 min_size         = 2

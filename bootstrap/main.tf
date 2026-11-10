@@ -28,11 +28,18 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
+data "aws_partition" "current" {}
+
 locals {
   state_bucket = "${var.project_name}-tfstate-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
+
+  bucket_id  = var.create_bucket_with_cli ? terraform_data.state_cli[0].output.bucket : aws_s3_bucket.state[0].id
+  bucket_arn = "arn:${data.aws_partition.current.partition}:s3:::${local.bucket_id}"
 }
 
 resource "aws_s3_bucket" "state" {
+  count = var.create_bucket_with_cli ? 0 : 1
+
   bucket = local.state_bucket
 
   # Les états sont précieux : jamais de suppression accidentelle avec des objets dedans
@@ -41,8 +48,29 @@ resource "aws_s3_bucket" "state" {
   tags = { Name = local.state_bucket }
 }
 
+# Learner Lab : bucket créé par l'AWS CLI (voir modules/storage pour l'explication de la SCP)
+resource "terraform_data" "state_cli" {
+  count = var.create_bucket_with_cli ? 1 : 0
+
+  input = {
+    bucket        = local.state_bucket
+    region        = var.aws_region
+    force_destroy = var.force_destroy
+    script        = "${path.module}/../modules/storage/scripts/delete-bucket.sh"
+  }
+
+  provisioner "local-exec" {
+    command = "aws s3api head-bucket --bucket ${self.input.bucket} 2>/dev/null || aws s3api create-bucket --bucket ${self.input.bucket} --region ${self.input.region} ${self.input.region == "us-east-1" ? "" : "--create-bucket-configuration LocationConstraint=${self.input.region}"}"
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = "bash ${self.input.script} ${self.input.bucket} ${self.input.force_destroy}"
+  }
+}
+
 resource "aws_s3_bucket_versioning" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = local.bucket_id
 
   versioning_configuration {
     status = "Enabled"
@@ -50,7 +78,7 @@ resource "aws_s3_bucket_versioning" "state" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = local.bucket_id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -61,7 +89,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
 }
 
 resource "aws_s3_bucket_public_access_block" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = local.bucket_id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -70,7 +98,7 @@ resource "aws_s3_bucket_public_access_block" "state" {
 }
 
 resource "aws_s3_bucket_ownership_controls" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = local.bucket_id
 
   rule {
     object_ownership = "BucketOwnerEnforced"
@@ -78,7 +106,7 @@ resource "aws_s3_bucket_ownership_controls" "state" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = local.bucket_id
 
   rule {
     id     = "keep-90-days-of-history"
@@ -100,8 +128,8 @@ data "aws_iam_policy_document" "state" {
     effect  = "Deny"
     actions = ["s3:*"]
     resources = [
-      aws_s3_bucket.state.arn,
-      "${aws_s3_bucket.state.arn}/*",
+      local.bucket_arn,
+      "${local.bucket_arn}/*",
     ]
 
     principals {
@@ -118,7 +146,7 @@ data "aws_iam_policy_document" "state" {
 }
 
 resource "aws_s3_bucket_policy" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = local.bucket_id
   policy = data.aws_iam_policy_document.state.json
 
   depends_on = [aws_s3_bucket_public_access_block.state]

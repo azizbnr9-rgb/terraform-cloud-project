@@ -31,6 +31,12 @@ variable "noncurrent_version_days" {
   }
 }
 
+variable "create_bucket_with_cli" {
+  description = "Crée le bucket via l'AWS CLI (contournement de la SCP AWS Academy Learner Lab sur GetBucketObjectLockConfiguration)."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags appliqués aux ressources du module."
   type        = map(string)

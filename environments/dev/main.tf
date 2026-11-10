@@ -37,6 +37,8 @@ module "storage" {
   name_prefix        = local.name_prefix
   force_destroy      = var.force_destroy_storage
   log_retention_days = var.log_retention_days
+
+  create_bucket_with_cli = var.create_buckets_with_cli
 }
 
 module "security" {
