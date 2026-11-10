@@ -13,7 +13,7 @@ resource "aws_security_group" "alb" {
 
 resource "aws_security_group" "app" {
   name        = "${var.name_prefix}-sg-app"
-  description = "Instances applicatives : trafic web uniquement depuis l'ALB"
+  description = "Instances applicatives - trafic web uniquement depuis le SG ALB"
   vpc_id      = var.vpc_id
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-sg-app" })
@@ -62,7 +62,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_app" {
 # --- APP -------------------------------------------------------------------
 resource "aws_vpc_security_group_ingress_rule" "app_from_alb" {
   security_group_id            = aws_security_group.app.id
-  description                  = "Trafic web depuis le SG de l'ALB uniquement"
+  description                  = "Trafic web depuis le SG ALB uniquement"
   ip_protocol                  = "tcp"
   from_port                    = var.app_port
   to_port                      = var.app_port
@@ -90,7 +90,7 @@ resource "aws_vpc_security_group_egress_rule" "app_http_out" {
 
 resource "aws_vpc_security_group_egress_rule" "app_to_db" {
   security_group_id            = aws_security_group.app.id
-  description                  = "Vers la base de données"
+  description                  = "Vers la base de donnees"
   ip_protocol                  = "tcp"
   from_port                    = var.db_port
   to_port                      = var.db_port
@@ -130,7 +130,7 @@ resource "aws_iam_role" "ec2" {
   count = var.create_iam_role ? 1 : 0
 
   name               = "${var.name_prefix}-role-ec2"
-  description        = "Rôle des instances applicatives ${var.name_prefix}"
+  description        = "Role des instances applicatives ${var.name_prefix}"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 
   tags = var.tags
