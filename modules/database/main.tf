@@ -13,8 +13,9 @@ resource "aws_db_parameter_group" "this" {
 
   # Chiffrement TLS obligatoire pour les connexions clientes
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot" # paramètre statique : évite une dérive permanente du plan
   }
 
   parameter {

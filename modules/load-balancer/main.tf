@@ -38,8 +38,8 @@ resource "aws_lb_target_group" "app" {
     path                = var.health_check_path
     protocol            = "HTTP"
     matcher             = "200"
-    interval            = 15
-    timeout             = 5
+    interval            = 5 # détection d'une instance en panne en ~10 s
+    timeout             = 3
     healthy_threshold   = 2
     unhealthy_threshold = 2
   }

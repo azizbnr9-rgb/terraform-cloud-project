@@ -4,7 +4,7 @@ Application Load Balancer public, Target Group avec health check et listeners.
 
 - Listener **HTTP:80** : `forward` vers le Target Group, ou redirection 301 vers HTTPS si `certificate_arn` est fourni.
 - Listener **HTTPS:443** (optionnel) : politique TLS 1.2/1.3.
-- Health check `GET /health` → `200`, toutes les 15 s, 2 succès/échecs.
+- Health check `GET /health` → `200`, toutes les 5 s, 2 succès/échecs.
 - `drop_invalid_header_fields` activé ; journaux d'accès vers S3 si `access_logs_bucket` est fourni.
 
 ## Entrées
