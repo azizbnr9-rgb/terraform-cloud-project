@@ -18,6 +18,12 @@ Infrastructure **modulaire, sécurisée et reproductible** écrite en Terraform,
 
 Détails : [docs/architecture.md](docs/architecture.md) · Sécurité : [docs/securite.md](docs/securite.md) · Coûts : [docs/couts.md](docs/couts.md) · Tests : [docs/tests.md](docs/tests.md) · CI/CD : [docs/cicd.md](docs/cicd.md)
 
+## Résultats
+
+Déployé et testé réellement le 2026-11-10 (AWS Academy Learner Lab, us-east-1) : 46 ressources, 9 tests obligatoires validés, puis `terraform destroy`. Voir [docs/test-results-dev.md](docs/test-results-dev.md) et [docs/preuves-dev.txt](docs/preuves-dev.txt).
+
+![Page de démonstration](docs/capture-page-web.jpg)
+
 ## 2. Organisation du dépôt
 
 ```

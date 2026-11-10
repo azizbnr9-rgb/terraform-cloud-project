@@ -1,5 +1,7 @@
 # Tests obligatoires
 
+> Résultats de l'exécution réelle du 2026-11-10 : [test-results-dev.md](test-results-dev.md) — 9 tests validés.
+
 Automatisés par `./scripts/run-tests.sh <env>` (résultats écrits dans `docs/test-results-<env>.md`).
 
 | Test | Procédure | Résultat attendu | Vérification automatique |

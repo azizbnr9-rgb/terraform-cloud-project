@@ -1,0 +1,24 @@
+== Preuves environnement dev - 2026-11-10 17:32 UTC (AWS Academy Learner Lab, us-east-1)
+-- VPC
+cloud5-dev-vpc 10.20.0.0/16
+-- Sous-reseaux
+cloud5-dev-public-a 10.20.1.0/24 us-east-1a
+cloud5-dev-app-a 10.20.11.0/24 us-east-1a
+cloud5-dev-app-b 10.20.12.0/24 us-east-1b
+cloud5-dev-public-b 10.20.2.0/24 us-east-1b
+cloud5-dev-db-a 10.20.21.0/24 us-east-1a
+cloud5-dev-db-b 10.20.22.0/24 us-east-1b
+-- Cibles du Target Group
+i-0880345a65fb6d8c0 healthy
+i-03502caff39bbbef2 healthy
+-- Auto Scaling Group
+i-03502caff39bbbef2 us-east-1b InService Healthy
+i-0880345a65fb6d8c0 us-east-1a InService Healthy
+-- RDS (identifiant, moteur, version, classe, PubliclyAccessible, StorageEncrypted, subnet group)
+cloud5-dev-db postgres 16.13 db.t3.micro False True cloud5-dev-db-subnets
+-- Backend S3 (etat Terraform)
+2026-11-10 17:15:43 115124 dev/terraform.tfstate
+-- Page Web (ALB http://cloud5-dev-alb-1442745685.us-east-1.elb.amazonaws.com)
+Host ip-10-20-12-165.ec2.internal i-03502caff39bbbef2 us-east-1b
+-- Derive
+terraform plan : No changes. Your infrastructure matches the configuration.
