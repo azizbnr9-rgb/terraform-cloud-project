@@ -1,0 +1,42 @@
+#!/bin/bash
+# Installe un serveur web léger affichant l'identité de l'instance.
+set -euxo pipefail
+
+dnf -y update || yum -y update
+dnf -y install nginx || yum -y install nginx
+
+# Métadonnées via IMDSv2 (jeton obligatoire)
+TOKEN=$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+md() { curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
+
+INSTANCE_ID=$(md instance-id)
+AZ=$(md placement/availability-zone)
+PRIVATE_IP=$(md local-ipv4)
+HOST=$(hostname)
+
+cat > /usr/share/nginx/html/index.html <<HTML
+<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="utf-8"><title>Terraform Cloud Project</title>
+<style>body{font-family:sans-serif;max-width:640px;margin:60px auto;color:#1f2937}
+td{padding:6px 14px;border-bottom:1px solid #e5e7eb}code{color:#2563eb}</style></head>
+<body>
+<h1>Terraform Cloud Project</h1>
+<p>Environnement : <strong>${environment}</strong></p>
+<table>
+<tr><td>Host</td><td><code>$HOST</code></td></tr>
+<tr><td>Instance</td><td><code>$INSTANCE_ID</code></td></tr>
+<tr><td>Zone</td><td><code>$AZ</code></td></tr>
+<tr><td>IP privée</td><td><code>$PRIVATE_IP</code></td></tr>
+</table>
+<p>Actualisez la page pour observer la répartition de charge.</p>
+</body></html>
+HTML
+
+# Point de contrôle pour le health check du Target Group
+echo "OK" > /usr/share/nginx/html/health
+
+# Port d'écoute configurable
+sed -i "s/listen\s\+80;/listen ${app_port};/; s/listen\s\+\[::\]:80;/listen [::]:${app_port};/" /etc/nginx/nginx.conf
+
+systemctl enable --now nginx

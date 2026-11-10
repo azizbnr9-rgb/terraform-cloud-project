@@ -1,0 +1,33 @@
+# Terraform : répertoires de travail et états (l'état vit dans le backend S3)
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+plan.txt
+crash.log
+crash.*.log
+.terraform.tfstate.lock.info
+
+# Fichiers de variables locaux ou contenant des secrets
+*.local.tfvars
+*.secret.tfvars
+secret*.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Identifiants : ne JAMAIS versionner
+.aws/
+credentials
+*.pem
+*.key
+.env
+.env.*
+
+# Système / éditeurs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
