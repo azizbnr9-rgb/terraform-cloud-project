@@ -1,3 +1,5 @@
+data "aws_region" "current" {}
+
 data "aws_ssm_parameter" "ami" {
   name = var.ami_ssm_parameter
 }
@@ -38,8 +40,14 @@ resource "aws_launch_template" "app" {
   }
 
   user_data = base64encode(templatefile("${path.module}/templates/user_data.sh.tftpl", {
-    environment = var.environment
-    app_port    = var.app_port
+    environment    = var.environment
+    app_port       = var.app_port
+    db_address     = var.db_address
+    db_name        = var.db_name
+    db_port        = var.db_port
+    db_secret_arn  = var.db_secret_arn
+    s3_bucket_name = var.s3_bucket_name
+    aws_region     = data.aws_region.current.name
   }))
 
   tag_specifications {

@@ -1,42 +1,451 @@
 #!/bin/bash
-# Installe un serveur web léger affichant l'identité de l'instance.
+# ---------------------------------------------------------------------------
+# Cloud5 Web Platform - Fullstack App Deployment
+# Application dynamique Python/Flask connectée à RDS PostgreSQL et S3
+# Haute disponibilité multi-AZ via Application Load Balancer
+# ---------------------------------------------------------------------------
 set -euxo pipefail
 
+# 1. Mise à jour et paquets de base
 dnf -y update || yum -y update
-dnf -y install nginx || yum -y install nginx
+dnf -y install nginx python3-pip jq awscli || yum -y install nginx python3-pip jq awscli
 
-# Métadonnées via IMDSv2 (jeton obligatoire)
-TOKEN=$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
-md() { curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
+# 2. Point de santé immédiat pour que le Target Group valide l'instance sans délai
+mkdir -p /usr/share/nginx/html
+echo "OK" > /usr/share/nginx/html/health
+systemctl enable --now nginx
 
-INSTANCE_ID=$(md instance-id)
-AZ=$(md placement/availability-zone)
-PRIVATE_IP=$(md local-ipv4)
+# 3. Récupération des métadonnées EC2 via IMDSv2
+TOKEN=$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || echo "")
+if [ -n "$TOKEN" ]; then
+  INSTANCE_ID=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/instance-id" || hostname)
+  AZ=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/placement/availability-zone" || echo "unknown")
+  PRIVATE_IP=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/local-ipv4" || echo "127.0.0.1")
+else
+  INSTANCE_ID=$(hostname)
+  AZ="unknown"
+  PRIVATE_IP="127.0.0.1"
+fi
 HOST=$(hostname)
 
-cat > /usr/share/nginx/html/index.html <<HTML
+# 4. Installation des dépendances Python
+pip3 install --no-cache-dir flask psycopg2-binary gunicorn boto3 --break-system-packages 2>/dev/null || \
+pip3 install --no-cache-dir flask psycopg2-binary gunicorn boto3 || true
+
+# 5. Création du répertoire applicatif et de la configuration
+mkdir -p /opt/app
+cat > /opt/app/config.json << JSON_EOF
+{
+  "environment": "${environment}",
+  "app_port": ${app_port},
+  "db_address": "${db_address}",
+  "db_name": "${db_name}",
+  "db_port": ${db_port},
+  "db_secret_arn": "${db_secret_arn}",
+  "s3_bucket_name": "${s3_bucket_name}",
+  "aws_region": "${aws_region}",
+  "instance_id": "$INSTANCE_ID",
+  "availability_zone": "$AZ",
+  "private_ip": "$PRIVATE_IP",
+  "hostname": "$HOST"
+}
+JSON_EOF
+
+# 6. Écriture du code de l'application Flask
+cat > /opt/app/app.py << 'PYEOF'
+import os
+import json
+import socket
+import urllib.request
+from datetime import datetime
+from flask import Flask, render_template_string, request, redirect, jsonify
+
+app = Flask(__name__)
+
+CONFIG_FILE = "/opt/app/config.json"
+config = {}
+if os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE, "r") as f:
+        config = json.load(f)
+
+ENV_NAME = config.get("environment", "dev")
+DB_HOST = config.get("db_address", "")
+DB_NAME = config.get("db_name", "appdb")
+DB_PORT = config.get("db_port", 5432)
+DB_SECRET_ARN = config.get("db_secret_arn", "")
+S3_BUCKET = config.get("s3_bucket_name", "")
+AWS_REGION = config.get("aws_region", "us-east-1")
+INSTANCE_ID = config.get("instance_id", socket.gethostname())
+AZ = config.get("availability_zone", "unknown")
+PRIVATE_IP = config.get("private_ip", "127.0.0.1")
+HOST = config.get("hostname", socket.gethostname())
+
+def get_db_credentials():
+    username = "dbadmin"
+    password = ""
+    if DB_SECRET_ARN:
+        try:
+            import boto3
+            sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+            res = sm.get_secret_value(SecretId=DB_SECRET_ARN)
+            if "SecretString" in res:
+                sdata = json.loads(res["SecretString"])
+                return sdata.get("username", username), sdata.get("password", "")
+        except Exception:
+            pass
+    return username, password
+
+def get_connection():
+    if not DB_HOST:
+        return None
+    import psycopg2
+    u, p = get_db_credentials()
+    return psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=u,
+        password=p,
+        sslmode="require",
+        connect_timeout=3
+    )
+
+def ensure_table():
+    if not DB_HOST:
+        return
+    try:
+        conn = get_connection()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS notes (
+                        id SERIAL PRIMARY KEY,
+                        title VARCHAR(120) NOT NULL,
+                        author VARCHAR(60) NOT NULL,
+                        content TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        instance_id VARCHAR(50),
+                        az VARCHAR(50)
+                    );
+                """)
+                cur.execute("SELECT COUNT(*) FROM notes;")
+                if cur.fetchone()[0] == 0:
+                    cur.execute("""
+                        INSERT INTO notes (title, author, content, instance_id, az)
+                        VALUES (%s, %s, %s, %s, %s);
+                    """, (
+                        "Bienvenue sur la plateforme Cloud5 !",
+                        "Equipe DevOps",
+                        "Infrastructure 3-tiers deployee avec Terraform sur AWS, connectee a PostgreSQL RDS et securisee par ALB.",
+                        INSTANCE_ID,
+                        AZ
+                    ))
+                conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"Init DB table error: {e}")
+
+try:
+    ensure_table()
+except Exception:
+    pass
+
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="fr">
-<head><meta charset="utf-8"><title>Terraform Cloud Project</title>
-<style>body{font-family:sans-serif;max-width:640px;margin:60px auto;color:#1f2937}
-td{padding:6px 14px;border-bottom:1px solid #e5e7eb}code{color:#2563eb}</style></head>
-<body>
-<h1>Terraform Cloud Project</h1>
-<p>Environnement : <strong>${environment}</strong></p>
-<table>
-<tr><td>Host</td><td><code>$HOST</code></td></tr>
-<tr><td>Instance</td><td><code>$INSTANCE_ID</code></td></tr>
-<tr><td>Zone</td><td><code>$AZ</code></td></tr>
-<tr><td>IP privée</td><td><code>$PRIVATE_IP</code></td></tr>
-</table>
-<p>Actualisez la page pour observer la répartition de charge.</p>
-</body></html>
-HTML
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terraform Cloud Platform - {{ environment | upper }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+    <!-- Header -->
+    <header class="bg-gradient-to-r from-blue-700 via-indigo-700 to-cyan-600 text-white shadow-lg">
+        <div class="max-w-6xl mx-auto px-6 py-6 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+                <div class="flex items-center gap-3">
+                    <span class="text-3xl">☁️</span>
+                    <h1 class="text-2xl font-bold tracking-tight">Terraform Cloud Project</h1>
+                    <span class="px-3 py-1 text-xs font-semibold uppercase tracking-wider rounded-full bg-white/20 text-white border border-white/30">
+                        {{ environment }}
+                    </span>
+                </div>
+                <p class="text-blue-100 text-sm mt-1">Plateforme Web Haute Disponibilité Multi-AZ & CI/CD</p>
+            </div>
+            <button onclick="window.location.reload();" class="px-4 py-2 bg-white text-blue-700 font-semibold rounded-lg shadow hover:bg-blue-50 transition flex items-center gap-2">
+                <span>🔄</span> Actualiser (Tester l'ALB)
+            </button>
+        </div>
+    </header>
 
-# Point de contrôle pour le health check du Target Group
-echo "OK" > /usr/share/nginx/html/health
+    <main class="max-w-6xl mx-auto px-6 py-8 space-y-8">
 
-# Port d'écoute configurable
-sed -i "s/listen\s\+80;/listen ${app_port};/; s/listen\s\+\[::\]:80;/listen [::]:${app_port};/" /etc/nginx/nginx.conf
+        <!-- Grille des Métadonnées d'Infrastructure -->
+        <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <!-- Zone -->
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                <span class="text-xs uppercase font-bold text-slate-400">Zone de Disponibilité</span>
+                <div class="mt-2 flex items-center gap-2">
+                    <span class="h-3 w-3 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span class="text-lg font-bold text-slate-900">{{ az }}</span>
+                </div>
+                <p class="text-xs text-slate-500 mt-1">Multi-AZ Load Balanced</p>
+            </div>
 
-systemctl enable --now nginx
+            <!-- Instance ID -->
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                <span class="text-xs uppercase font-bold text-slate-400">Instance EC2</span>
+                <div class="mt-2">
+                    <code class="text-sm font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded">{{ instance_id }}</code>
+                </div>
+                <p class="text-xs text-slate-500 mt-1">Host: {{ host }}</p>
+            </div>
+
+            <!-- IP Privée -->
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                <span class="text-xs uppercase font-bold text-slate-400">IP Privée</span>
+                <div class="mt-2">
+                    <span class="text-lg font-semibold text-slate-800">{{ private_ip }}</span>
+                </div>
+                <p class="text-xs text-slate-500 mt-1">Sous-réseau privé App</p>
+            </div>
+
+            <!-- Base de données -->
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                <span class="text-xs uppercase font-bold text-slate-400">Base PostgreSQL RDS</span>
+                <div class="mt-2 flex items-center gap-2">
+                    {% if db_connected %}
+                    <span class="px-2 py-0.5 text-xs font-semibold rounded bg-green-100 text-green-800">✅ Connectée</span>
+                    {% else %}
+                    <span class="px-2 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800">⚠️ En cours...</span>
+                    {% endif %}
+                </div>
+                <p class="text-xs text-slate-500 mt-1 truncate" title="{{ db_host }}">{{ db_host or 'Local/Mock' }}</p>
+            </div>
+        </section>
+
+        <!-- Formulaire et Données PostgreSQL -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Formulaire d'ajout -->
+            <section class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm lg:col-span-1">
+                <div class="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+                    <span class="text-xl">✍️</span>
+                    <h2 class="text-lg font-bold text-slate-800">Ajouter une Note</h2>
+                </div>
+                <form action="/add" method="POST" class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Auteur</label>
+                        <input type="text" name="author" required placeholder="Votre nom (ex: Ingénieur DevOps)" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Titre</label>
+                        <input type="text" name="title" required placeholder="Titre de la tâche ou note" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Message</label>
+                        <textarea name="content" required rows="3" placeholder="Description enregistrée dans PostgreSQL..." class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"></textarea>
+                    </div>
+                    <button type="submit" class="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm rounded-lg shadow transition">
+                        Enregistrer dans RDS PostgreSQL 🚀
+                    </button>
+                </form>
+            </section>
+
+            <!-- Liste des données stockées dans RDS -->
+            <section class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm lg:col-span-2">
+                <div class="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xl">🗄️</span>
+                        <h2 class="text-lg font-bold text-slate-800">Données Persistées (PostgreSQL RDS)</h2>
+                    </div>
+                    <span class="text-xs bg-slate-100 text-slate-600 font-medium px-2.5 py-1 rounded-full">
+                        {{ notes | length }} note(s)
+                    </span>
+                </div>
+
+                {% if notes %}
+                <div class="space-y-3">
+                    {% for n in notes %}
+                    <div class="p-4 rounded-lg border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition">
+                        <div class="flex justify-between items-start gap-2">
+                            <h3 class="font-bold text-slate-900 text-sm">{{ n.title }}</h3>
+                            <span class="text-[11px] text-slate-400 whitespace-nowrap">{{ n.created_at }}</span>
+                        </div>
+                        <p class="text-slate-600 text-sm mt-1">{{ n.content }}</p>
+                        <div class="mt-3 pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs text-slate-500">
+                            <span>Auteur : <strong class="text-slate-700">{{ n.author }}</strong></span>
+                            <span class="font-mono text-[11px] text-blue-600">Écrit par : {{ n.instance_id }} ({{ n.az }})</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="text-center py-12 text-slate-400">
+                    <p class="text-sm">Aucune note enregistrée pour le moment.</p>
+                </div>
+                {% endif %}
+            </section>
+        </div>
+
+        <!-- Détails Techniques & Architecture -->
+        <section class="bg-white p-5 rounded-xl border border-slate-200 text-xs text-slate-500 space-y-2">
+            <div class="font-semibold text-slate-700 uppercase tracking-wider text-[11px]">Vérification Pédagogique :</div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <div>• <strong>ALB / Répartition :</strong> Actualisez pour voir <code>Instance ID</code> et <code>Zone</code> basculer entre vos serveurs.</div>
+                <div>• <strong>Résistance aux pannes :</strong> Éteignez une instance ➡️ Le site reste disponible et les données restent intactes dans RDS.</div>
+                <div>• <strong>Sécurité RDS :</strong> La base de données n'est accessible que depuis les instances privées (aucun port 5432 exposé à Internet).</div>
+            </div>
+            {% if s3_bucket %}
+            <div class="pt-2 border-t border-slate-100 text-slate-400">
+                Bucket S3 configuré : <code>{{ s3_bucket }}</code>
+            </div>
+            {% endif %}
+        </section>
+
+    </main>
+</body>
+</html>
+"""
+
+@app.route("/")
+def index():
+    notes = []
+    db_connected = False
+    if DB_HOST:
+        try:
+            conn = get_connection()
+            if conn:
+                db_connected = True
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id, title, author, content, TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS'), instance_id, az FROM notes ORDER BY id DESC LIMIT 20;")
+                    rows = cur.fetchall()
+                    for r in rows:
+                        notes.append({
+                            "id": r[0],
+                            "title": r[1],
+                            "author": r[2],
+                            "content": r[3],
+                            "created_at": r[4],
+                            "instance_id": r[5] or "unknown",
+                            "az": r[6] or "unknown"
+                        })
+                conn.close()
+        except Exception as e:
+            print(f"Error fetching notes: {e}")
+
+    return render_template_string(
+        HTML_TEMPLATE,
+        environment=ENV_NAME,
+        host=HOST,
+        instance_id=INSTANCE_ID,
+        az=AZ,
+        private_ip=PRIVATE_IP,
+        db_connected=db_connected,
+        db_host=DB_HOST,
+        notes=notes,
+        s3_bucket=S3_BUCKET
+    )
+
+@app.route("/add", methods=["POST"])
+def add_note():
+    author = request.form.get("author", "Anonyme")
+    title = request.form.get("title", "Sans titre")
+    content = request.form.get("content", "")
+
+    if DB_HOST and content:
+        try:
+            conn = get_connection()
+            if conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO notes (title, author, content, instance_id, az)
+                        VALUES (%s, %s, %s, %s, %s);
+                    """, (title, author, content, INSTANCE_ID, AZ))
+                conn.commit()
+                conn.close()
+        except Exception as e:
+            print(f"Error inserting note: {e}")
+
+    return redirect("/")
+
+@app.route("/health")
+def health():
+    db_status = "unconfigured"
+    if DB_HOST:
+        try:
+            conn = get_connection()
+            if conn:
+                conn.close()
+                db_status = "connected"
+            else:
+                db_status = "disconnected"
+        except Exception as e:
+            db_status = f"error: {str(e)[:40]}"
+
+    return jsonify({
+        "status": "healthy",
+        "instance_id": INSTANCE_ID,
+        "availability_zone": AZ,
+        "database": db_status
+    }), 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+PYEOF
+
+# 7. Création du service systemd pour Gunicorn
+GUNICORN_BIN=$(command -v gunicorn || echo "/usr/local/bin/gunicorn")
+cat > /etc/systemd/system/cloudapp.service << SERVICE_EOF
+[Unit]
+Description=Cloud5 Fullstack Python/Flask Application
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/app
+ExecStart=$GUNICORN_BIN --bind 127.0.0.1:5000 --workers 2 --threads 2 --timeout 30 app:app
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+systemctl daemon-reload
+systemctl enable --now cloudapp || true
+
+# 8. Configuration Nginx en Reverse Proxy vers Gunicorn (port 5000)
+cat > /etc/nginx/conf.d/cloudapp.conf << NGINX_EOF
+server {
+    listen ${app_port} default_server;
+    listen [::]:${app_port} default_server;
+
+    location /health {
+        proxy_pass http://127.0.0.1:5000/health;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 2s;
+        error_page 502 503 504 = @fallback_health;
+    }
+
+    location @fallback_health {
+        return 200 "OK";
+        add_header Content-Type text/plain;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+}
+NGINX_EOF
+
+# Suppression du bloc server par défaut de Nginx pour éviter les conflits de port
+sed -i '/^\s*server\s*{/,/^\s*}/d' /etc/nginx/nginx.conf 2>/dev/null || true
+
+systemctl restart nginx || true

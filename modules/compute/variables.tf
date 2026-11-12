@@ -107,3 +107,33 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "db_address" {
+  description = "Nom d'hote prive de la base RDS PostgreSQL."
+  type        = string
+  default     = ""
+}
+
+variable "db_name" {
+  description = "Nom de la base de donnees."
+  type        = string
+  default     = "appdb"
+}
+
+variable "db_port" {
+  description = "Port d'ecoute de la base RDS."
+  type        = number
+  default     = 5432
+}
+
+variable "db_secret_arn" {
+  description = "ARN du secret Secrets Manager pour les identifiants administrateur RDS."
+  type        = string
+  default     = ""
+}
+
+variable "s3_bucket_name" {
+  description = "Nom du bucket S3 applicatif pour les assets et journaux."
+  type        = string
+  default     = ""
+}

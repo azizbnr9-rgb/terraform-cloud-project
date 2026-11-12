@@ -83,6 +83,12 @@ module "compute" {
   min_size              = var.min_size
   max_size              = var.max_size
   desired_capacity      = var.desired_capacity
+
+  db_address     = module.database.db_address
+  db_name        = module.database.db_name
+  db_port        = module.database.db_port
+  db_secret_arn  = module.database.master_user_secret_arn
+  s3_bucket_name = module.storage.bucket_name
 }
 
 module "database" {
